@@ -3,156 +3,439 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
+
+// =========================================================
+// TYPES
+// =========================================================
+
 interface Device {
   id: string;
   device_name: string;
   device_key: string;
   state: boolean;
+  last_seen: string | null;
+  online: boolean;
   updated_at: string;
 }
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+// =========================================================
+// SUPABASE
+// =========================================================
+
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
 
 if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error(
-    "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY"
+    "Missing Supabase environment variables."
   );
 }
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+const supabase = createClient(
+  supabaseUrl,
+  supabaseAnonKey
+);
+
+
+// =========================================================
+// DEVICE
+// =========================================================
 
 const DEVICE_KEY = "esp32-001";
 
+
+// Device is considered online if
+// ESP32 was seen within the last 15 seconds.
+
+const ONLINE_TIMEOUT = 15000;
+
+
+// =========================================================
+// HOME
+// =========================================================
+
 export default function Home() {
-  const [device, setDevice] = useState<Device | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [changing, setChanging] = useState<boolean>(false);
-  const [message, setMessage] = useState<string>("");
 
-  // ---------------------------------------------------------
+  const [device, setDevice] =
+    useState<Device | null>(null);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [changing, setChanging] =
+    useState(false);
+
+  const [message, setMessage] =
+    useState("");
+
+  const [now, setNow] =
+    useState(Date.now());
+
+
+  // =======================================================
   // LOAD DEVICE
-  // ---------------------------------------------------------
+  // =======================================================
 
-  async function loadDevice(): Promise<void> {
-    setLoading(true);
+  async function loadDevice() {
 
-    const { data, error } = await supabase
+    const {
+      data,
+      error
+    } = await supabase
       .from("devices")
       .select("*")
-      .eq("device_key", DEVICE_KEY)
+      .eq(
+        "device_key",
+        DEVICE_KEY
+      )
       .single();
 
+
     if (error) {
-      console.error("LOAD DEVICE ERROR:", error);
-      setMessage(`Unable to load device: ${error.message}`);
+
+      console.error(
+        "LOAD DEVICE ERROR:",
+        error
+      );
+
+      setMessage(
+        `Unable to load device: ${error.message}`
+      );
+
     } else if (data) {
-      setDevice(data as Device);
+
+      setDevice(
+        data as Device
+      );
     }
+
 
     setLoading(false);
   }
 
-  // ---------------------------------------------------------
-  // CHANGE DEVICE STATE
-  // ---------------------------------------------------------
 
-  async function setDeviceState(newState: boolean): Promise<void> {
+  // =======================================================
+  // CHANGE DEVICE STATE
+  // =======================================================
+
+  async function setDeviceState(
+    newState: boolean
+  ) {
+
     if (!device || changing) {
       return;
     }
 
+
     setChanging(true);
+
     setMessage("");
 
-    const { data, error } = await supabase
+
+    const {
+      data,
+      error
+    } = await supabase
       .from("devices")
       .update({
+
         state: newState,
-        updated_at: new Date().toISOString(),
+
+        updated_at:
+          new Date().toISOString(),
+
       })
-      .eq("device_key", DEVICE_KEY)
+      .eq(
+        "device_key",
+        DEVICE_KEY
+      )
       .select()
       .single();
 
-    if (error) {
-      console.error("UPDATE DEVICE ERROR:", error);
-      setMessage(`Failed to update device: ${error.message}`);
-    } else if (data) {
-      setDevice(data as Device);
 
-      if (newState) {
-        setMessage("Device turned ON");
-      } else {
-        setMessage("Device turned OFF");
-      }
+    if (error) {
+
+      console.error(
+        "UPDATE DEVICE ERROR:",
+        error
+      );
+
+      setMessage(
+        `Failed to update device: ${error.message}`
+      );
+
+    } else if (data) {
+
+      setDevice(
+        data as Device
+      );
+
+
+      setMessage(
+        newState
+          ? "ON command sent"
+          : "OFF command sent"
+      );
     }
+
 
     setChanging(false);
   }
 
-  // ---------------------------------------------------------
-  // INITIAL LOAD + REALTIME
-  // ---------------------------------------------------------
+
+  // =======================================================
+  // INITIAL LOAD
+  // =======================================================
 
   useEffect(() => {
+
     loadDevice();
 
-    const channel = supabase
-      .channel(`device-${DEVICE_KEY}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "devices",
-          filter: `device_key=eq.${DEVICE_KEY}`,
-        },
-        (payload) => {
-          const updatedDevice = payload.new as Device;
 
-          setDevice(updatedDevice);
-        }
-      )
-      .subscribe((status) => {
-        console.log("Realtime status:", status);
-      });
+    // =====================================================
+    // REALTIME
+    // =====================================================
+
+    const channel =
+      supabase
+        .channel(
+          `device-${DEVICE_KEY}`
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+
+            schema: "public",
+
+            table: "devices",
+
+            filter:
+              `device_key=eq.${DEVICE_KEY}`,
+          },
+
+          (payload) => {
+
+            if (
+              payload.new
+            ) {
+
+              setDevice(
+                payload.new as Device
+              );
+            }
+          }
+        )
+        .subscribe(
+          (status) => {
+
+            console.log(
+              "Realtime status:",
+              status
+            );
+          }
+        );
+
 
     return () => {
-      supabase.removeChannel(channel);
+
+      supabase.removeChannel(
+        channel
+      );
     };
+
   }, []);
 
-  // ---------------------------------------------------------
+
+  // =======================================================
+  // UPDATE CURRENT TIME
+  //
+  // This allows the UI to automatically turn the device
+  // from ONLINE to OFFLINE when last_seen becomes old.
+  // =======================================================
+
+  useEffect(() => {
+
+    const timer =
+      setInterval(() => {
+
+        setNow(
+          Date.now()
+        );
+
+      }, 1000);
+
+
+    return () => {
+
+      clearInterval(
+        timer
+      );
+
+    };
+
+  }, []);
+
+
+  // =======================================================
+  // CALCULATE ONLINE STATUS
+  // =======================================================
+
+  function isDeviceOnline() {
+
+    if (
+      !device ||
+      !device.last_seen
+    ) {
+
+      return false;
+    }
+
+
+    const lastSeen =
+      new Date(
+        device.last_seen
+      ).getTime();
+
+
+    const difference =
+      now - lastSeen;
+
+
+    return (
+      difference <
+      ONLINE_TIMEOUT
+    );
+  }
+
+
+  // =======================================================
+  // LAST SEEN TEXT
+  // =======================================================
+
+  function getLastSeenText() {
+
+    if (!device?.last_seen) {
+
+      return "Never";
+    }
+
+
+    const lastSeen =
+      new Date(
+        device.last_seen
+      ).getTime();
+
+
+    const seconds =
+      Math.floor(
+        (now - lastSeen) / 1000
+      );
+
+
+    if (seconds < 0) {
+
+      return "Just now";
+    }
+
+
+    if (seconds < 5) {
+
+      return "Just now";
+    }
+
+
+    if (seconds < 60) {
+
+      return `${seconds} seconds ago`;
+    }
+
+
+    const minutes =
+      Math.floor(
+        seconds / 60
+      );
+
+
+    if (minutes < 60) {
+
+      return `${minutes} minute${
+        minutes !== 1
+          ? "s"
+          : ""
+      } ago`;
+    }
+
+
+    return new Date(
+      device.last_seen
+    ).toLocaleString();
+  }
+
+
+  // =======================================================
   // LOADING
-  // ---------------------------------------------------------
+  // =======================================================
 
   if (loading) {
+
     return (
+
       <main className="page">
+
         <div className="loading">
+
           <div className="spinner" />
-          <p>Connecting to ESP32...</p>
+
+          <p>
+            Connecting to ESP32...
+          </p>
+
         </div>
 
-        <style jsx>{styles}</style>
+
+        <style jsx>
+          {styles}
+        </style>
+
       </main>
     );
   }
 
-  // ---------------------------------------------------------
-  // MAIN PAGE
-  // ---------------------------------------------------------
+
+  // =======================================================
+  // DEVICE ONLINE STATUS
+  // =======================================================
+
+  const deviceOnline =
+    isDeviceOnline();
+
+
+  // =======================================================
+  // MAIN
+  // =======================================================
 
   return (
+
     <main className="page">
+
       <div className="container">
 
-        {/* HEADER */}
+
+        {/* =================================================
+            HEADER
+        ================================================= */}
 
         <header className="header">
 
           <div>
+
             <div className="brand">
               ESP32 Control
             </div>
@@ -160,153 +443,327 @@ export default function Home() {
             <div className="subtitle">
               Remote IoT Dashboard
             </div>
+
           </div>
 
-          <div className="connection">
-            <span className="onlineDot" />
-            Cloud Connected
+
+          <div
+            className={
+              deviceOnline
+                ? "connection online"
+                : "connection offline"
+            }
+          >
+
+            <span className="statusDot" />
+
+            {deviceOnline
+              ? "Online"
+              : "Offline"}
+
           </div>
 
         </header>
 
 
-        {/* DEVICE CARD */}
+        {/* =================================================
+            DEVICE CARD
+        ================================================= */}
 
-        <section className="deviceCard">
+        {device ? (
 
-          <div className="deviceTop">
+          <section className="deviceCard">
 
-            <div>
-              <div className="deviceName">
-                {device?.device_name || "ESP32 Device"}
+
+            {/* DEVICE HEADER */}
+
+            <div className="deviceTop">
+
+              <div>
+
+                <div className="deviceName">
+
+                  {device.device_name}
+
+                </div>
+
+
+                <div className="deviceId">
+
+                  Device ID:{" "}
+
+                  {device.device_key}
+
+                </div>
+
               </div>
 
-              <div className="deviceId">
-                Device ID: {DEVICE_KEY}
+
+              <div
+                className={
+                  device.state
+                    ? "stateBadge onBadge"
+                    : "stateBadge offBadge"
+                }
+              >
+
+                {device.state
+                  ? "ON"
+                  : "OFF"}
+
               </div>
+
             </div>
+
+
+            {/* CONNECTION STATUS */}
 
             <div
-              className={`stateBadge ${
-                device?.state ? "onBadge" : "offBadge"
-              }`}
+              className={
+                deviceOnline
+                  ? "connectionBox connectionBoxOnline"
+                  : "connectionBox connectionBoxOffline"
+              }
             >
-              {device?.state ? "ON" : "OFF"}
+
+              <div className="connectionIcon">
+
+                {deviceOnline
+                  ? "●"
+                  : "●"}
+
+              </div>
+
+
+              <div>
+
+                <div className="connectionTitle">
+
+                  {deviceOnline
+                    ? "ESP32 is Online"
+                    : "ESP32 is Offline"}
+
+                </div>
+
+
+                <div className="connectionText">
+
+                  Last seen:{" "}
+
+                  {getLastSeenText()}
+
+                </div>
+
+              </div>
+
             </div>
 
-          </div>
+
+            {/* CURRENT STATE */}
+
+            <div className="statusBox">
+
+              <div className="statusLabel">
+
+                Current Device State
+
+              </div>
 
 
-          {/* STATUS */}
+              <div
+                className={
+                  device.state
+                    ? "statusValue onText"
+                    : "statusValue offText"
+                }
+              >
 
-          <div className="statusBox">
+                {device.state
+                  ? "Device is ON"
+                  : "Device is OFF"}
 
-            <div className="statusLabel">
-              Current Device State
+              </div>
+
             </div>
 
-            <div
-              className={`statusValue ${
-                device?.state ? "onText" : "offText"
-              }`}
-            >
-              {device?.state ? "Device is ON" : "Device is OFF"}
+
+            {/* CONTROLS */}
+
+            <div className="controls">
+
+
+              <button
+                type="button"
+                className="onButton"
+                disabled={
+                  changing ||
+                  !deviceOnline ||
+                  device.state
+                }
+                onClick={() =>
+                  setDeviceState(true)
+                }
+              >
+
+                {changing &&
+                !device.state
+
+                  ? "Sending..."
+
+                  : "TURN ON"}
+
+              </button>
+
+
+              <button
+                type="button"
+                className="offButton"
+                disabled={
+                  changing ||
+                  !deviceOnline ||
+                  !device.state
+                }
+                onClick={() =>
+                  setDeviceState(false)
+                }
+              >
+
+                {changing &&
+                device.state
+
+                  ? "Sending..."
+
+                  : "TURN OFF"}
+
+              </button>
+
             </div>
 
-          </div>
+
+            {/* OFFLINE WARNING */}
+
+            {!deviceOnline && (
+
+              <div className="offlineWarning">
+
+                ESP32 is currently offline.
+                <br />
+
+                Connect the device to Wi-Fi
+                before sending commands.
+
+              </div>
+
+            )}
 
 
-          {/* BUTTONS */}
+            {/* MESSAGE */}
 
-          <div className="controls">
+            {message && (
 
-            <button
-              type="button"
-              className="onButton"
-              disabled={changing || device?.state === true}
-              onClick={() => setDeviceState(true)}
-            >
-              {changing && device?.state === false
-                ? "Turning ON..."
-                : "TURN ON"}
-            </button>
+              <div className="message">
+
+                {message}
+
+              </div>
+
+            )}
 
 
-            <button
-              type="button"
-              className="offButton"
-              disabled={changing || device?.state === false}
-              onClick={() => setDeviceState(false)}
-            >
-              {changing && device?.state === true
-                ? "Turning OFF..."
-                : "TURN OFF"}
-            </button>
+            {/* LAST UPDATE */}
 
-          </div>
+            <div className="lastUpdate">
 
+              <span>
+                Last command update:
+              </span>
 
-          {/* MESSAGE */}
+              <span>
 
-          {message && (
-            <div className="message">
-              {message}
+                {device.updated_at
+                  ? new Date(
+                      device.updated_at
+                    ).toLocaleString()
+                  : "Never"}
+
+              </span>
+
             </div>
-          )}
 
 
-          {/* LAST UPDATED */}
+          </section>
 
-          <div className="lastUpdate">
+        ) : (
 
-            <span>Last updated:</span>
+          <section className="notFound">
 
-            <span>
-              {device?.updated_at
-                ? new Date(device.updated_at).toLocaleString()
-                : "Never"}
-            </span>
+            <h2>
+              Device not found
+            </h2>
 
-          </div>
+            <p>
+              Device
+              <strong>
+                {" "}esp32-001
+              </strong>
+              {" "}
+              doesn't exist in Supabase.
+            </p>
 
-        </section>
+          </section>
+
+        )}
 
 
-        {/* INFORMATION */}
+        {/* =================================================
+            INFORMATION CARDS
+        ================================================= */}
 
         <section className="infoGrid">
 
+
           <div className="infoCard">
+
             <div className="infoTitle">
-              Device
+              DEVICE
             </div>
 
             <div className="infoValue">
               ESP32
             </div>
+
           </div>
 
 
           <div className="infoCard">
+
             <div className="infoTitle">
-              Network
+              CONNECTION
             </div>
 
             <div className="infoValue">
-              Wi-Fi
+
+              {deviceOnline
+                ? "Online"
+                : "Offline"}
+
             </div>
+
           </div>
 
 
           <div className="infoCard">
+
             <div className="infoTitle">
-              Control
+              CONTROL
             </div>
 
             <div className="infoValue">
               Worldwide
             </div>
+
           </div>
+
 
         </section>
 
@@ -314,13 +771,19 @@ export default function Home() {
         {/* FOOTER */}
 
         <footer>
+
           ESP32 IoT Control Dashboard
+
         </footer>
+
 
       </div>
 
 
-      <style jsx>{styles}</style>
+      <style jsx>
+        {styles}
+      </style>
+
     </main>
   );
 }
@@ -336,7 +799,16 @@ const styles = `
   box-sizing: border-box;
 }
 
+
+body {
+  margin: 0;
+}
+
+
+/* PAGE */
+
 .page {
+
   min-height: 100vh;
 
   background:
@@ -355,46 +827,68 @@ const styles = `
     sans-serif;
 
   padding: 20px;
+
 }
 
+
+/* CONTAINER */
+
 .container {
+
   width: 100%;
+
   max-width: 1000px;
+
   margin: auto;
+
 }
 
 
 /* HEADER */
 
 .header {
+
   display: flex;
 
-  justify-content: space-between;
+  justify-content:
+    space-between;
+
   align-items: center;
 
   gap: 20px;
 
   padding:
     20px 0 30px;
+
 }
 
+
 .brand {
+
   font-size: 30px;
 
   font-weight: 800;
 
   letter-spacing: -1px;
+
 }
 
+
 .subtitle {
+
   color: #9ca3af;
 
   margin-top: 5px;
 
   font-size: 14px;
+
 }
 
+
+/* CONNECTION */
+
 .connection {
+
   display: flex;
 
   align-items: center;
@@ -402,9 +896,18 @@ const styles = `
   gap: 8px;
 
   padding:
-    9px 14px;
+    9px 15px;
 
   border-radius: 50px;
+
+  font-size: 14px;
+
+  font-weight: 600;
+
+}
+
+
+.connection.online {
 
   background:
     rgba(34,197,94,0.12);
@@ -415,26 +918,40 @@ const styles = `
 
   color: #4ade80;
 
-  font-size: 14px;
 }
 
-.onlineDot {
-  width: 8px;
-  height: 8px;
 
-  background: #22c55e;
+.connection.offline {
+
+  background:
+    rgba(239,68,68,0.12);
+
+  border:
+    1px solid
+    rgba(239,68,68,0.25);
+
+  color: #f87171;
+
+}
+
+
+.statusDot {
+
+  width: 8px;
+
+  height: 8px;
 
   border-radius: 50%;
 
-  box-shadow:
-    0 0 10px
-    rgba(34,197,94,0.8);
+  background: currentColor;
+
 }
 
 
 /* DEVICE CARD */
 
 .deviceCard {
+
   background:
     rgba(17,24,39,0.85);
 
@@ -450,36 +967,54 @@ const styles = `
     0 25px 70px
     rgba(0,0,0,0.4);
 
-  backdrop-filter: blur(15px);
+  backdrop-filter:
+    blur(15px);
+
 }
 
+
+/* DEVICE TOP */
+
 .deviceTop {
+
   display: flex;
 
   align-items: center;
 
-  justify-content: space-between;
+  justify-content:
+    space-between;
 
   gap: 20px;
 
-  margin-bottom: 30px;
+  margin-bottom: 25px;
+
 }
 
+
 .deviceName {
+
   font-size: 24px;
 
   font-weight: 700;
+
 }
 
+
 .deviceId {
+
   color: #6b7280;
 
   font-size: 13px;
 
   margin-top: 6px;
+
 }
 
+
+/* STATE */
+
 .stateBadge {
+
   padding:
     9px 18px;
 
@@ -488,9 +1023,12 @@ const styles = `
   font-size: 13px;
 
   font-weight: 700;
+
 }
 
+
 .onBadge {
+
   background:
     rgba(34,197,94,0.15);
 
@@ -499,9 +1037,12 @@ const styles = `
   border:
     1px solid
     rgba(34,197,94,0.3);
+
 }
 
+
 .offBadge {
+
   background:
     rgba(239,68,68,0.12);
 
@@ -510,12 +1051,100 @@ const styles = `
   border:
     1px solid
     rgba(239,68,68,0.25);
+
+}
+
+
+/* CONNECTION BOX */
+
+.connectionBox {
+
+  display: flex;
+
+  align-items: center;
+
+  gap: 15px;
+
+  padding: 18px;
+
+  border-radius: 16px;
+
+  margin-bottom: 20px;
+
+}
+
+
+.connectionBoxOnline {
+
+  background:
+    rgba(34,197,94,0.08);
+
+  border:
+    1px solid
+    rgba(34,197,94,0.15);
+
+}
+
+
+.connectionBoxOffline {
+
+  background:
+    rgba(239,68,68,0.08);
+
+  border:
+    1px solid
+    rgba(239,68,68,0.15);
+
+}
+
+
+.connectionIcon {
+
+  font-size: 22px;
+
+}
+
+
+.connectionBoxOnline
+.connectionIcon {
+
+  color: #22c55e;
+
+}
+
+
+.connectionBoxOffline
+.connectionIcon {
+
+  color: #ef4444;
+
+}
+
+
+.connectionTitle {
+
+  font-size: 15px;
+
+  font-weight: 700;
+
+}
+
+
+.connectionText {
+
+  margin-top: 4px;
+
+  color: #9ca3af;
+
+  font-size: 12px;
+
 }
 
 
 /* STATUS */
 
 .statusBox {
+
   text-align: center;
 
   padding:
@@ -528,34 +1157,48 @@ const styles = `
   border:
     1px solid
     rgba(255,255,255,0.06);
+
 }
 
+
 .statusLabel {
+
   color: #6b7280;
 
   font-size: 13px;
 
   margin-bottom: 10px;
+
 }
 
+
 .statusValue {
+
   font-size: 28px;
 
   font-weight: 800;
+
 }
+
 
 .onText {
+
   color: #4ade80;
+
 }
+
 
 .offText {
+
   color: #f87171;
+
 }
 
 
-/* BUTTONS */
+/* CONTROLS */
 
 .controls {
+
   display: grid;
 
   grid-template-columns:
@@ -564,9 +1207,12 @@ const styles = `
   gap: 15px;
 
   margin-top: 25px;
+
 }
 
+
 .controls button {
+
   min-height: 60px;
 
   border: none;
@@ -582,25 +1228,39 @@ const styles = `
   transition:
     transform 0.15s,
     opacity 0.15s;
+
 }
+
 
 .controls button:hover {
-  transform: translateY(-2px);
+
+  transform:
+    translateY(-2px);
+
 }
+
 
 .controls button:active {
-  transform: scale(0.98);
+
+  transform:
+    scale(0.98);
+
 }
 
+
 .controls button:disabled {
-  opacity: 0.35;
+
+  opacity: 0.3;
 
   cursor: not-allowed;
 
   transform: none;
+
 }
 
+
 .onButton {
+
   background: #22c55e;
 
   color: #03130a;
@@ -608,9 +1268,12 @@ const styles = `
   box-shadow:
     0 10px 30px
     rgba(34,197,94,0.2);
+
 }
 
+
 .offButton {
+
   background: #ef4444;
 
   color: white;
@@ -618,12 +1281,42 @@ const styles = `
   box-shadow:
     0 10px 30px
     rgba(239,68,68,0.2);
+
+}
+
+
+/* OFFLINE */
+
+.offlineWarning {
+
+  text-align: center;
+
+  margin-top: 20px;
+
+  padding: 14px;
+
+  border-radius: 12px;
+
+  background:
+    rgba(239,68,68,0.08);
+
+  border:
+    1px solid
+    rgba(239,68,68,0.15);
+
+  color: #fca5a5;
+
+  font-size: 13px;
+
+  line-height: 1.6;
+
 }
 
 
 /* MESSAGE */
 
 .message {
+
   text-align: center;
 
   margin-top: 20px;
@@ -638,15 +1331,18 @@ const styles = `
   color: #d1d5db;
 
   font-size: 14px;
+
 }
 
 
 /* LAST UPDATE */
 
 .lastUpdate {
+
   display: flex;
 
-  justify-content: center;
+  justify-content:
+    center;
 
   gap: 5px;
 
@@ -655,16 +1351,21 @@ const styles = `
   font-size: 12px;
 
   margin-top: 20px;
+
 }
 
+
 .lastUpdate span:last-child {
+
   color: #9ca3af;
+
 }
 
 
 /* INFO */
 
 .infoGrid {
+
   display: grid;
 
   grid-template-columns:
@@ -673,9 +1374,12 @@ const styles = `
   gap: 15px;
 
   margin-top: 20px;
+
 }
 
+
 .infoCard {
+
   background:
     rgba(17,24,39,0.75);
 
@@ -686,26 +1390,70 @@ const styles = `
   border-radius: 18px;
 
   padding: 20px;
+
 }
+
 
 .infoTitle {
+
   color: #6b7280;
 
-  font-size: 12px;
+  font-size: 11px;
 
   margin-bottom: 7px;
+
+  letter-spacing: 1px;
+
 }
 
+
 .infoValue {
+
   font-size: 17px;
 
   font-weight: 700;
+
+}
+
+
+/* NOT FOUND */
+
+.notFound {
+
+  background:
+    rgba(17,24,39,0.85);
+
+  border:
+    1px solid
+    rgba(239,68,68,0.2);
+
+  border-radius: 20px;
+
+  padding: 40px;
+
+  text-align: center;
+
+}
+
+
+.notFound h2 {
+
+  margin: 0 0 10px;
+
+}
+
+
+.notFound p {
+
+  color: #9ca3af;
+
 }
 
 
 /* FOOTER */
 
 footer {
+
   text-align: center;
 
   color: #4b5563;
@@ -714,12 +1462,14 @@ footer {
 
   padding:
     30px 0 10px;
+
 }
 
 
 /* LOADING */
 
 .loading {
+
   min-height: 90vh;
 
   display: flex;
@@ -731,17 +1481,22 @@ footer {
   justify-content: center;
 
   color: #9ca3af;
+
 }
 
+
 .spinner {
+
   width: 35px;
+
   height: 35px;
 
   border:
     3px solid
     rgba(255,255,255,0.1);
 
-  border-top-color: #22c55e;
+  border-top-color:
+    #22c55e;
 
   border-radius: 50%;
 
@@ -749,12 +1504,17 @@ footer {
     spin 0.8s linear infinite;
 
   margin-bottom: 15px;
+
 }
+
 
 @keyframes spin {
 
   to {
-    transform: rotate(360deg);
+
+    transform:
+      rotate(360deg);
+
   }
 
 }
@@ -765,80 +1525,137 @@ footer {
 @media (max-width: 600px) {
 
   .page {
+
     padding: 12px;
+
   }
 
+
   .header {
+
     padding:
       15px 5px 20px;
 
-    align-items: flex-start;
+    align-items:
+      flex-start;
+
   }
+
 
   .brand {
+
     font-size: 24px;
+
   }
+
 
   .subtitle {
+
     font-size: 12px;
+
   }
 
+
   .connection {
+
     font-size: 12px;
 
     padding:
       7px 10px;
+
   }
 
+
   .deviceCard {
+
     padding: 20px;
 
     border-radius: 20px;
+
   }
+
 
   .deviceTop {
-    margin-bottom: 22px;
+
+    margin-bottom: 20px;
+
   }
+
 
   .deviceName {
+
     font-size: 20px;
+
   }
 
+
   .stateBadge {
+
     padding:
       7px 12px;
 
     font-size: 11px;
+
   }
+
+
+  .connectionBox {
+
+    padding: 15px;
+
+  }
+
 
   .statusBox {
+
     padding:
       30px 15px;
+
   }
+
 
   .statusValue {
+
     font-size: 23px;
+
   }
+
 
   .controls {
-    grid-template-columns: 1fr;
+
+    grid-template-columns:
+      1fr;
 
     gap: 12px;
+
   }
+
 
   .controls button {
+
     min-height: 58px;
+
   }
+
 
   .infoGrid {
-    grid-template-columns: 1fr;
+
+    grid-template-columns:
+      1fr;
+
   }
 
-  .lastUpdate {
-    flex-direction: column;
 
-    align-items: center;
+  .lastUpdate {
+
+    flex-direction:
+      column;
+
+    align-items:
+      center;
+
   }
 
 }
+
 `;
